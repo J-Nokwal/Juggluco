@@ -46,6 +46,10 @@ class GlucoseTileService : TileService() {
     @Volatile
     private var lastFrame: Frame? = null
 
+    private val blankPng: ByteArray by lazy {
+        Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).toPng()
+    }
+
     override fun onTileRequest(
         requestParams: RequestBuilders.TileRequest,
     ): ListenableFuture<TileBuilders.Tile> {
@@ -68,26 +72,34 @@ class GlucoseTileService : TileService() {
     ): ListenableFuture<ResourceBuilders.Resources> {
         val device = requestParams.deviceConfiguration
         return background("resources") {
-            // The tile just asked for this version, so normally it is still the one drawn.
-            val frame = lastFrame?.takeIf { it.version == requestParams.version }
+            // Answer for the version the system asked about, not whichever reading is current:
+            // a saved tile is paired with its own resources version, and a service the system
+            // recreated has no frame left, so the picture is redrawn from current data and
+            // handed back under the requested version.
+            val version = requestParams.version
+            val frame = lastFrame?.takeIf { it.version == version }
                 ?: render(device.screenWidthDp, device.screenHeightDp, device.screenDensity)
-            val resources = ResourceBuilders.Resources.Builder().setVersion(frame.version)
-            frame.png?.let { png ->
-                resources.addIdToImageMapping(
+            // Always name the image: a layout saved while a reading was shown still points at
+            // it, and the reading may have expired since. A blank one stands in then.
+            val png = frame.png ?: blankPng
+            val widthPx = if (frame.png == null) 1 else frame.widthPx
+            val heightPx = if (frame.png == null) 1 else frame.heightPx
+            ResourceBuilders.Resources.Builder()
+                .setVersion(version)
+                .addIdToImageMapping(
                     IMAGE_ID,
                     ResourceBuilders.ImageResource.Builder()
                         .setInlineResource(
                             ResourceBuilders.InlineImageResource.Builder()
                                 .setData(png)
-                                .setWidthPx(frame.widthPx)
-                                .setHeightPx(frame.heightPx)
+                                .setWidthPx(widthPx)
+                                .setHeightPx(heightPx)
                                 .setFormat(ResourceBuilders.IMAGE_FORMAT_UNDEFINED)
                                 .build(),
                         )
                         .build(),
                 )
-            }
-            resources.build()
+                .build()
         }
     }
 
